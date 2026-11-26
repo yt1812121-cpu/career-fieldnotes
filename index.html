@@ -100,14 +100,35 @@ $('#restore').onclick=()=>$('#backupFile').click();$('#backupFile').onchange=asy
 
 function combinedBody(e){return [e.summary,...[['发现与判断',e.learning],['产出与结果',e.output],['待跟进',e.follow_up]].filter(([,v])=>v).map(([k,v])=>k+'：\n'+v)].filter(Boolean).join('\n\n')}
 function parsePastedNote(raw){
- const d={},body=[]; const lines=raw.replace(/\r/g,'').split('\n');
- const clean=x=>x.trim().replace(/^\s*#{1,6}\s+/,'').replace(/^\s*[-*]\s+/,'').replace(/\*\*/g,'').trim();
- const map={'经历名称':'title','事项名称':'title','事项':'title','标题':'title','名称':'title','来源':'source','经历来源':'source','状态':'status','关联项目':'project','项目':'project','项目节点':'milestone','类型':'category','能力标签':'skills','能力关键词':'skills','能力':'skills','开始日期':'start_date','结束日期':'end_date','日期':'date','时间':'date'};
+ const d={},body=[];
+ const map={'经历名称':'title','事项名称':'title','事项':'title','标题':'title','名称':'title','来源':'source','经历来源':'source','状态':'status','关联项目':'project','项目':'project','项目节点':'milestone','类型':'category','能力标签':'skills','能力关键词':'skills','能力积累':'skills','能力':'skills','开始日期':'start_date','结束日期':'end_date','日期':'date','时间':'date'};
+ const bodyLabels=new Set(['背景与分工','背景/任务','背景 / 任务','背景','任务','我的角色与负责内容','过程与关键协作','发现与判断','发现与收获','观察与收获','观察/问题','观察 / 问题','我的判断及依据','产出与结果','产出/结果','产出 / 结果','产出','结果','方法与收获','方法/收获','方法 / 收获','可复用的方法','反馈与复盘','待跟进','待确认','待跟进/待确认','待跟进 / 待确认','后续可追','后续','正文','经历正文']);
+ function inline(t){return t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'$1 ($2)').replace(/\*\*\*(?=\S)(.+?)\*\*\*/g,'$1').replace(/\*\*(?=\S)(.+?)\*\*/g,'$1').replace(/__(?=\S)(.+?)__/g,'$1').replace(/(^|[\s（(：:])\*(?=\S)([^*\n]+?)\*(?=$|[\s，。；：！？、）)])/g,'$1$2').replace(/`([^`]+)`/g,'$1').replace(/\\([*#_`])/g,'$1')}
  function dates(v){return [...v.matchAll(/(\d{4})[年.\/-](\d{1,2})[月.\/-](\d{1,2})日?/g)].map(m=>{let y=+m[1],mo=+m[2],da=+m[3],dt=new Date(y,mo-1,da);return dt.getFullYear()===y&&dt.getMonth()===mo-1&&dt.getDate()===da?`${y}-${String(mo).padStart(2,'0')}-${String(da).padStart(2,'0')}`:''}).filter(Boolean)}
- for(let i=0;i<lines.length;i++){let line=lines[i],t=clean(line);if(!t){body.push(line);continue}let m=t.match(/^([^：:]{1,20})[：:]\s*(.*)$/);let k=m&&map[m[1].trim()],v=m&&m[2].trim();if(k&&v){if(k==='source'){let x={'实习经历':'internship','实习':'internship','个人探索':'personal','个人经历':'personal'}[v];if(x){d.source=x;continue}}else if(k==='status'){let x=v==='跟进中'?'进行中':v;if(['进行中','已完成','待确认'].includes(x)){d.status=x;continue}}else if(['date','start_date','end_date'].includes(k)){let ds=dates(v);if(ds.length){if(k==='end_date')d.end_date=ds[0];else{d.start_date=ds[0];if(ds[1])d.end_date=ds[1];else{let tail=v.match(/(?:—|–|至|~|～)\s*(\d{1,2})[月.\/-](\d{1,2})日?\s*$/);if(tail){let a=dates(d.start_date.slice(0,4)+'-'+tail[1]+'-'+tail[2]);if(a.length)d.end_date=a[0]}}}continue}}else{d[k]=v;continue}}
- if(!d.title&&/^\s*#{1,6}\s+/.test(line)&&!body.some(x=>x.trim())){let ds=dates(t);let parts=t.split(/[｜|]/);if(ds.length&&parts.length>1){d.start_date=ds[0];if(ds[1])d.end_date=ds[1];d.title=parts.slice(1).join('｜').trim()}else d.title=t;continue}body.push(line)
+ function setDates(v,k){let ds=dates(v);if(!ds.length)return false;if(k==='end_date'){d.end_date=ds[0];return true}d.start_date=ds[0];if(ds[1])d.end_date=ds[1];else{let tail=v.match(/(?:—|–|至|~|～)\s*(?:(\d{1,2})[月.\/-])?(\d{1,2})日?\s*$/);if(tail){let [y,m]=ds[0].split('-');let a=dates(`${y}-${tail[1]||m}-${tail[2]}`);if(a.length&&a[0]>=d.start_date)d.end_date=a[0]}}return true}
+ function field(k,v){if(!v)return false;if(k==='source'){let x={'实习经历':'internship','实习':'internship','个人探索':'personal','个人经历':'personal','自主探索':'personal'}[v];if(!x)return false;d.source=x}else if(k==='status'){let x=v==='跟进中'?'进行中':v;if(!['进行中','已完成','待确认'].includes(x))return false;d.status=x}else if(['date','start_date','end_date'].includes(k)){return setDates(v,k)}else if(k==='skills'){d.skills=[...new Set(v.split(/[,，、；;\n]/).map(x=>x.trim().replace(/^[•*\-]\s*/, '')).filter(Boolean))].join('，')}else d[k]=v;return true}
+ const lines=raw.replace(/\r\n?/g,'\n').replace(/^\uFEFF/,'').split('\n');
+ let pending='',inFence=false;
+ for(let i=0;i<lines.length;i++){
+  let line=lines[i],trim=line.trim();
+  if(/^```/.test(trim)){inFence=!inFence;continue}
+  if(!trim){if(body.length&&body.at(-1)!=='')body.push('');continue}
+  if(!inFence&&/^(?:-{3,}|\*{3,}|_{3,})$/.test(trim))continue;
+  const heading=!inFence&&/^#{1,6}\s+/.test(trim),bullet=!inFence&&/^[-*+]\s+/.test(trim);
+  let t=inFence?line:inline(trim.replace(/^#{1,6}\s+/,'').replace(/^[-*+]\s+/,'')).trim();
+  if(!inFence){
+   // Accept both **日期：** and **日期**：, including heading-only fields.
+   let m=t.match(/^([^：:]{1,24})[：:]\s*(.*)$/),label=m?m[1].trim():t,v=m?m[2].trim():'';
+   if(pending){let k=pending;pending='';if(!map[label]&&!bodyLabels.has(label)&&field(k,t))continue;}
+   if(map[label]&&(m||heading||/^\*\*.*\*\*$/.test(trim))){if(v&&field(map[label],v))continue;if(!v){pending=map[label];continue}}
+   if(bodyLabels.has(label)&&(m||heading||/^\*\*.*\*\*$/.test(trim))){if(body.length&&body.at(-1)!=='')body.push('');body.push(label+'：'+(v?'\n'+v:''));continue}
+   if(!d.title&&heading&&!body.some(x=>x.trim())){let parts=t.split(/[｜|]/);if(parts.length>1&&setDates(parts[0],'date'))d.title=parts.slice(1).join('｜').trim();else d.title=t;continue}
+  }
+  body.push((bullet?'• ':'')+t);
  }
- d.summary=body.join('\n').trim();if(!d.title){let first=clean(d.summary.split('\n').find(x=>x.trim())||'');if(first)d.title=first.slice(0,60)}return d;
+ d.summary=body.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+ if(!d.title){let first=d.summary.split('\n').find(x=>x.trim())||'';if(first)d.title=first.replace(/^•\s*/,'').slice(0,60)}
+ return d;
 }
 $('#parseNote').onclick=()=>{let raw=$('#pasteNote').value.trim();if(!raw){$('#pasteStatus').textContent='请先粘贴文字。';return}let d=parsePastedNote(raw),f=$('#entryForm');if(f.elements.summary.value.trim()&&!confirm('识别将更新正文及识别出的字段，继续吗？'))return;for(const [k,v] of Object.entries(d)){if(f.elements[k])f.elements[k].value=v}syncSkills();$('#pasteStatus').textContent='已填入识别结果，请核对来源、日期和正文。';$('#pasteDetails').open=false;f.elements.title.focus()};
 $('#entryForm').addEventListener('reset',()=>{ $('#pasteNote').value='';$('#pasteStatus').textContent='仅在本机提取，核对后保存。';$('#pasteDetails').open=false; });
